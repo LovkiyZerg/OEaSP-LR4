@@ -1,20 +1,88 @@
-// LR4.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
+#include "common.h"
 
-#include <iostream>
+CRITICAL_SECTION g_logCs;
+LARGE_INTEGER g_startTime;
+LARGE_INTEGER g_freq;
 
-int main()
-{
-    std::cout << "Hello World!\n";
+double GetTimeMs() {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return (double)(now.QuadPart - g_startTime.QuadPart) * 1000.0 / (double)g_freq.QuadPart;
 }
 
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
+void LogEvent(int phId, const char* format, ...) {
+    EnterCriticalSection(&g_logCs);
 
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
+    double t = GetTimeMs();
+    if (phId >= 0) {
+        printf("[%06.0f ms] P%d ", t, phId);
+    }
+    else {
+        printf("[%06.0f ms] SYSTEM ", t);
+    }
+
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+
+    printf("\n");
+    LeaveCriticalSection(&g_logCs);
+}
+
+Config ParseArgs(int argc, char* argv[]) {
+    Config cfg;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-p" && i + 1 < argc) cfg.numPhilosophers = std::atoi(argv[++i]);
+        else if (arg == "-e" && i + 1 < argc) cfg.eatTimeMs = std::atoi(argv[++i]);
+        else if (arg == "-t" && i + 1 < argc) cfg.thinkTimeMs = std::atoi(argv[++i]);
+        else if (arg == "-o" && i + 1 < argc) cfg.operations = std::atoi(argv[++i]);
+    }
+    return cfg;
+}
+
+int main(int argc, char* argv[])
+{
+    SetConsoleOutputCP(1251);
+    SetConsoleCP(1251);
+
+    QueryPerformanceFrequency(&g_freq);
+    QueryPerformanceCounter(&g_startTime);
+    InitializeCriticalSection(&g_logCs);
+
+    Config cfg = ParseArgs(argc, argv);
+
+    printf("====================================================\n");
+    printf("Lab 4 | VARIANT %u (Ordered Capture) | STUDENT_ID: %u\n", VARIANT_ID, STUDENT_ID);
+    printf("Config: Philosophers=%d, EatTime=%d ms, ThinkTime=%d ms, Ops=%d\n",
+        cfg.numPhilosophers, cfg.eatTimeMs, cfg.thinkTimeMs, cfg.operations);
+    printf("Seed: %u | Total cycles per philosopher: %u\n", SEED, OPERATIONS);
+    printf("====================================================\n\n");
+
+    std::vector<Fork> forks(cfg.numPhilosophers);
+    std::vector<Philosopher> philosophers(cfg.numPhilosophers);
+
+    for (int i = 0; i < cfg.numPhilosophers; ++i) {
+        forks[i].id = i;
+        forks[i].ownerId = -1;
+        InitializeCriticalSection(&forks[i].cs);
+    }
+
+    for (int i = 0; i < cfg.numPhilosophers; ++i) {
+        philosophers[i].id = i;
+        philosophers[i].leftForkId = i;
+        philosophers[i].rightForkId = (i + 1) % cfg.numPhilosophers;
+    }
+
+    LogEvent(-1, "Infrastructure initialized. Ready to start threads.");
+    LogEvent(-1, "Press Enter to exit (threads not implemented yet)...");
+    getchar();
+
+    for (int i = 0; i < cfg.numPhilosophers; ++i) {
+        DeleteCriticalSection(&forks[i].cs);
+    }
+    DeleteCriticalSection(&g_logCs);
+
+    return 0;
+}
