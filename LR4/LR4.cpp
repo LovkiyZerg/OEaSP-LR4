@@ -3,6 +3,7 @@
 CRITICAL_SECTION g_logCs;
 LARGE_INTEGER g_startTime;
 LARGE_INTEGER g_freq;
+LONG g_invariantViolations = 0;
 
 double GetTimeMs() {
     LARGE_INTEGER now;
@@ -42,7 +43,6 @@ Config ParseArgs(int argc, char* argv[]) {
     return cfg;
 }
 
-// Функция, выполняемая в каждом потоке
 DWORD WINAPI PhilosopherThread(LPVOID lpParam) {
     ThreadData* data = (ThreadData*)lpParam;
     Philosopher* ph = data->ph;
@@ -50,9 +50,7 @@ DWORD WINAPI PhilosopherThread(LPVOID lpParam) {
     Fork* forks = data->forks;
 
     ph->tid = GetCurrentThreadId();
-    LogEvent(ph->id, "STARTED | TID=%lu", ph->tid);
-
-    Sleep((ph->id * 10) % 50);
+    Sleep((ph->id * 10) % 50); 
 
     for (int i = 0; i < cfg->operations; ++i) {
         LogEvent(ph->id, "THINKING");
@@ -61,13 +59,23 @@ DWORD WINAPI PhilosopherThread(LPVOID lpParam) {
         int firstFork = (std::min)(ph->leftForkId, ph->rightForkId);
         int secondFork = (std::max)(ph->leftForkId, ph->rightForkId);
 
-        LogEvent(ph->id, "WAITING RESOURCE=%d", firstFork);
+        LogEvent(ph->id, "WAITING RESOURCES %d,%d", firstFork, secondFork);
+
         LARGE_INTEGER waitStart, waitEnd;
         QueryPerformanceCounter(&waitStart);
 
+        EnterCriticalSection(&forks[firstFork].cs);
+        if (forks[firstFork].ownerId != -1) {
+            InterlockedIncrement(&g_invariantViolations);
+            LogEvent(ph->id, "INVARIANT VIOLATION! Fork %d already owned by %d", firstFork, forks[firstFork].ownerId);
+        }
         forks[firstFork].ownerId = ph->id;
 
-        LogEvent(ph->id, "WAITING RESOURCE=%d", secondFork);
+        EnterCriticalSection(&forks[secondFork].cs);
+        if (forks[secondFork].ownerId != -1) {
+            InterlockedIncrement(&g_invariantViolations);
+            LogEvent(ph->id, "INVARIANT VIOLATION! Fork %d already owned by %d", secondFork, forks[secondFork].ownerId);
+        }
         forks[secondFork].ownerId = ph->id;
 
         QueryPerformanceCounter(&waitEnd);
@@ -76,12 +84,16 @@ DWORD WINAPI PhilosopherThread(LPVOID lpParam) {
         ph->totalWaitTimeMs += waitTime;
         if (waitTime > ph->maxWaitTimeMs) ph->maxWaitTimeMs = waitTime;
 
-        LogEvent(ph->id, "EATING");
+        LogEvent(ph->id, "EATING (waited %.3f ms)", waitTime);
         ph->eatCount++;
         Sleep(cfg->eatTimeMs);
 
         forks[secondFork].ownerId = -1;
+        LeaveCriticalSection(&forks[secondFork].cs);
+
         forks[firstFork].ownerId = -1;
+        LeaveCriticalSection(&forks[firstFork].cs);
+
         LogEvent(ph->id, "RELEASED RESOURCES %d,%d", firstFork, secondFork);
     }
 
@@ -117,7 +129,7 @@ int main(int argc, char* argv[])
         InitializeCriticalSection(&forks[i].cs);
     }
 
-    LogEvent(-1, "Starting threads...");
+    LogEvent(-1, "Starting threads with synchronization...");
 
     for (int i = 0; i < cfg.numPhilosophers; ++i) {
         philosophers[i].id = i;
@@ -134,10 +146,9 @@ int main(int argc, char* argv[])
 
     WaitForMultipleObjects(cfg.numPhilosophers, hThreads.data(), TRUE, INFINITE);
 
-    LogEvent(-1, "All threads finished. Collecting statistics...\n");
+    LogEvent(-1, "All threads finished.\n");
 
     printf("\n=== STATISTICS ===\n");
-    int totalViolations = 0;
     for (int i = 0; i < cfg.numPhilosophers; ++i) {
         double avgWait = philosophers[i].totalWaitTimeMs / philosophers[i].eatCount;
         printf("Philosopher %d | Eaten: %d | Avg Wait: %.3f ms | Max Wait: %.3f ms\n",
@@ -145,19 +156,16 @@ int main(int argc, char* argv[])
             philosophers[i].eatCount,
             avgWait,
             philosophers[i].maxWaitTimeMs);
-
-        if (philosophers[i].eatCount != cfg.operations) {
-            printf("  [ERROR] Philosopher ate %d times, expected %d!\n", philosophers[i].eatCount, cfg.operations);
-            totalViolations++;
-        }
     }
 
-    if (totalViolations > 0) {
-        printf("\n!!! DETECTED %d RACE CONDITION VIOLATIONS !!!\n", totalViolations);
-        printf("(This is expected at Stage 2 without synchronization)\n");
+    printf("\n=== INVARIANTS CHECK ===\n");
+    if (g_invariantViolations == 0) {
+        printf("SUCCESS: No invariant violations detected. Forks are safe.\n");
+    }
+    else {
+        printf("FAILED: Detected %ld invariant violations!\n", g_invariantViolations);
     }
 
-    // Очистка
     for (int i = 0; i < cfg.numPhilosophers; ++i) {
         CloseHandle(hThreads[i]);
         DeleteCriticalSection(&forks[i].cs);

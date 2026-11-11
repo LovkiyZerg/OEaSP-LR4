@@ -22,8 +22,8 @@ struct Config {
 
 struct Fork {
     int id;
-    volatile LONG ownerId = -1;
-    CRITICAL_SECTION cs;
+    int ownerId = -1;    
+    CRITICAL_SECTION cs; 
 };
 
 struct Philosopher {
@@ -46,9 +46,9 @@ struct ThreadData {
 extern CRITICAL_SECTION g_logCs;
 extern LARGE_INTEGER g_startTime;
 extern LARGE_INTEGER g_freq;
+extern LONG g_invariantViolations; 
 
 double GetTimeMs();
 void LogEvent(int phId, const char* format, ...);
 Config ParseArgs(int argc, char* argv[]);
-
 DWORD WINAPI PhilosopherThread(LPVOID lpParam);
